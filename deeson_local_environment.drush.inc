@@ -11,6 +11,8 @@ function deeson_local_environment_drush_help($section) {
   switch ($section) {
     case 'drush:dle-install':
       return dt('Deeson local environment configuration tool.');
+    case 'drush:dle-gm':
+      return dt('Deeson local environment master module configuration generation tool.');
   }
 }
 
@@ -29,6 +31,21 @@ function deeson_local_environment_drush_command() {
       'drush dle-install' => 'Deeson local environment configuration tool.',
     ),
     'aliases' => array('dle-install'),
+  );
+
+  $items['deeson-local-environment-generate-master'] = array(
+    'description' => 'Deeson local environment master module configuration generation tool.',
+    'callback' => 'drush_deeson_local_environment_generate_master',
+    'options' => array(
+      'custom-prefixes' => array(
+        'description' => '.',
+        'example-value' => 'foo,bar',
+      ),
+    ),
+    'examples' => array(
+      'drush dle-gm' => 'Deeson local environment master module configuration generation tool.',
+    ),
+    'aliases' => array('dle-gm'),
   );
 
   return $items;
@@ -117,4 +134,97 @@ function drush_deeson_local_environment_install() {
     . DIRECTORY_SEPARATOR
     . ($build_params['frontend_build'] == 'N' ? 'no-frontend.bitbucket-pipelines.yml' : 'bitbucket-pipelines.yml');
   file_put_contents($root . DIRECTORY_SEPARATOR . 'bitbucket-pipelines.yml', file_get_contents($pipelines_file));
+}
+
+/**
+ * Deeson local environment master module configuration generation tool.
+ */
+function drush_deeson_local_environment_generate_master() {
+  $master_base_exclude = array(
+    'dblog',
+    'field_ui',
+    'syslog',
+    'update',
+  );
+
+  $custom_extension_prefixes = explode(',', drush_get_option('custom-prefixes', ''));
+
+  drush_include_engine('drupal', 'environment');
+
+  $core = array();
+  $contrib = array();
+  foreach (drush_get_modules(FALSE) as $extension_name => $extension) {
+    if (isset($extension->info['package']) && strpos($extension->info['package'], 'Core') === 0) {
+      $core[$extension_name] = $extension;
+    }
+    else {
+      $contrib[$extension_name] = $extension;
+    }
+  }
+
+  ksort($core);
+  ksort($contrib);
+
+  $master_core = array();
+  foreach ($core as $core_extension_name => $core_extension) {
+    if (in_array($core_extension_name, $master_base_exclude)) {
+      continue;
+    }
+
+    $master_core[] = '  '
+      . (!$core_extension->status ? '//' : '')
+      . "'" . $core_extension_name . "',";
+  }
+
+  $master_contrib = array();
+  $master_custom = array();
+  foreach ($contrib as $contrib_extension_name => $contrib_extension) {
+    if (in_array($contrib_extension_name, $master_base_exclude)) {
+      continue;
+    }
+
+    $custom = FALSE;
+    foreach ($custom_extension_prefixes as $custom_extension_prefix) {
+      if (stripos($contrib_extension_name, $custom_extension_prefix) === 0) {
+        $custom = TRUE;
+        break;
+      }
+    }
+
+    if (!$custom) {
+      if (!$contrib_extension->status) {
+        continue;
+      }
+      $master_contrib[] = '  '
+        . "'" . $contrib_extension_name . "',";
+    }
+    else {
+      $master_custom[] = '  '
+        . (!$contrib_extension->status ? '//' : '')
+        . "'" . $contrib_extension_name . "',";
+    }
+  }
+
+  chdir(dirname(__FILE__));
+  $command_path = getcwd();
+  chdir('../../../../..');
+  $root = getcwd();
+
+  $build_params = array(
+    'master_core' => implode("\n", $master_core),
+    'master_contrib' => implode("\n", $master_contrib),
+    'master_custom' => implode("\n", $master_custom),
+  );
+
+  $config_path = implode(DIRECTORY_SEPARATOR, array($command_path, 'conf'));
+  $master_inc = file_get_contents(implode(DIRECTORY_SEPARATOR, array($config_path, 'settings', 'master.settings.inc')));
+  foreach ($build_params as $build_param => $build_param_value) {
+    $master_inc = str_replace('<' . $build_param . '>', $build_param_value, $master_inc);
+  }
+
+  file_put_contents(implode(DIRECTORY_SEPARATOR, array($root, 'docroot', 'sites', 'all', 'conf', 'master.settings.inc')), $master_inc);
+}
+
+function _drush_deeson_local_environment_sort_extensions($a, $b) {
+  return strcasecmp($a->info['name'], $b->info['name']);
 }
