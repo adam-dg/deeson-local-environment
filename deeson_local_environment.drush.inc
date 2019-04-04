@@ -13,6 +13,12 @@ function deeson_local_environment_drush_help($section) {
       return dt('Deeson local environment configuration tool.');
     case 'drush:dle-gm':
       return dt('Deeson local environment master module configuration generation tool.');
+    case 'drush:dle-nd-prep':
+      return dt('Deeson local environment Nodequeue downgrade preparation tool.');
+    case 'drush:dle-nd-clean':
+      return dt('Deeson local environment Nodequeue downgrade cleanup tool.');
+    case 'drush:dle-nqv':
+      return dt('Sets the schema version of Nodequeue installed.');
   }
 }
 
@@ -46,6 +52,44 @@ function deeson_local_environment_drush_command() {
       'drush dle-gm' => 'Deeson local environment master module configuration generation tool.',
     ),
     'aliases' => array('dle-gm'),
+  );
+
+  $items['deeson-local-environment-nodequeue-downgrade-preparation'] = array(
+    'description' => 'Deeson local environment Nodequeue downgrade preparation tool.',
+    'callback' => 'drush_deeson_local_environment_nodequeue_downgrade_prep',
+    'options' => array(
+    ),
+    'examples' => array(
+      'drush dle-nd-prep' => 'Deeson local environment Nodequeue downgrade preparation tool.',
+    ),
+    'aliases' => array('dle-nd-prep'),
+  );
+
+  $items['deeson-local-environment-nodequeue-downgrade-cleanup'] = array(
+    'description' => 'Deeson local environment Nodequeue downgrade cleanup tool.',
+    'callback' => 'drush_deeson_local_environment_nodequeue_downgrade_cleanup',
+    'options' => array(
+    ),
+    'examples' => array(
+      'drush dle-nd-clean' => 'Deeson local environment Nodequeue downgrade cleanup tool.',
+    ),
+    'aliases' => array('dle-nd-clean'),
+  );
+
+  $items['deeson-local-environment-nodequeue-downgrade-set-nodequeue-version'] = array(
+    'description' => 'Sets the schema version of Nodequeue installed.',
+    'callback' => 'drush_deeson_local_environment_nodequeue_downgrade_set_nodequeue_version',
+    'options' => array(
+      'version' => array(
+        'description' => '.',
+        'example-value' => '7201',
+      ),
+    ),
+    'examples' => array(
+      'drush dle-nqv' => 'Sets the schema version of Nodequeue installed to the default of 7201.',
+      'drush dle-nqv 7200' => 'Sets the schema version of Nodequeue installed to the default of 7200.',
+    ),
+    'aliases' => array('dle-nqv'),
   );
 
   return $items;
@@ -225,6 +269,114 @@ function drush_deeson_local_environment_generate_master() {
   file_put_contents(implode(DIRECTORY_SEPARATOR, array($root, 'docroot', 'sites', 'all', 'conf', 'master.settings.inc')), $master_inc);
 }
 
+function drush_deeson_local_environment_nodequeue_downgrade_prep() {
+  $qid_field = array(
+    'description' => 'The primary identifier for a queue.',
+    'type' => 'int',
+    'unsigned' => TRUE,
+    'not null' => FALSE,
+  );
+
+  // Get a list of queue machine names.
+  $queues = db_select('nodequeue_queue', 'nq')
+    ->fields('nq', array('name'))
+    ->execute()
+    ->fetchCol(0);
+
+  $map = array();
+  $i = 1;
+  foreach ($queues as $name) {
+    $map[$name] = $i++;
+  }
+
+  // Changes to nodequeue_queue table.
+  db_add_field('nodequeue_queue', 'qid', $qid_field);
+  _drush_deeson_local_environment_nodequeue_downgrade_populate_qid('nodequeue_queue', $map);
+
+  // Changes to nodequeue_roles table.
+  db_add_field('nodequeue_roles', 'qid', $qid_field);
+  _drush_deeson_local_environment_nodequeue_downgrade_populate_qid('nodequeue_roles', $map);
+
+  // Changes to nodequeue_types table.
+  db_add_field('nodequeue_types', 'qid', $qid_field);
+  _drush_deeson_local_environment_nodequeue_downgrade_populate_qid('nodequeue_types', $map);
+
+  // Changes to nodequeue_subqueue table.
+  db_add_field('nodequeue_subqueue', 'qid', $qid_field);
+  _drush_deeson_local_environment_nodequeue_downgrade_populate_qid('nodequeue_subqueue', $map);
+
+  // Changes to nodequeue_nodes table.
+  db_add_field('nodequeue_nodes', 'qid', $qid_field);
+  _drush_deeson_local_environment_nodequeue_downgrade_populate_qid('nodequeue_nodes', $map);
+
+  // Change smartqueue table.
+  if (db_table_exists('smartqueue')) {
+    db_add_field('smartqueue', 'qid', $qid_field);
+    _drush_deeson_local_environment_nodequeue_downgrade_populate_qid('smartqueue', $map);
+  }
+}
+
+function drush_deeson_local_environment_nodequeue_downgrade_cleanup() {
+  // Changes to nodequeue_queue table.
+  db_drop_primary_key('nodequeue_queue');
+  db_add_unique_key('nodequeue_queue', 'name', array('name'));
+  db_add_primary_key('nodequeue_queue', array('qid'));
+  db_change_field('nodequeue_queue', 'qid', 'qid', array(
+    'type' => 'serial',
+    'unsigned' => TRUE,
+    'not null' => TRUE,
+  ));
+
+  // Changes to nodequeue_roles table.
+  db_drop_index('nodequeue_roles', 'name');
+  db_drop_field('nodequeue_roles', 'name');
+  db_add_index('nodequeue_roles', 'qid', array('qid'));
+
+  // Changes to nodequeue_types table.
+  db_drop_index('nodequeue_types', 'name');
+  db_drop_field('nodequeue_types', 'name');
+  db_add_index('nodequeue_types', 'qid', array('qid'));
+
+  // Changes to nodequeue_subqueue table.
+  db_drop_index('nodequeue_subqueue', 'name');
+  db_drop_field('nodequeue_subqueue', 'name');
+  db_add_index('nodequeue_subqueue', 'qid', array('qid'));
+
+  // Changes to nodequeue_nodes table.
+  db_drop_index('nodequeue_nodes', 'name');
+  db_drop_field('nodequeue_nodes', 'name');
+  db_add_index('nodequeue_nodes', 'qid', array('qid'));
+
+  // Change smartqueue table.
+  if (db_table_exists('smartqueue')) {
+    db_drop_primary_key('smartqueue');
+    db_drop_field('smartqueue', 'name');
+    db_add_primary_key('smartqueue', array('name'));
+    db_change_field('smartqueue', 'qid', 'qid', array(
+      'type' => 'serial',
+      'unsigned' => TRUE,
+      'not null' => TRUE,
+    ));
+  }
+}
+
+function drush_deeson_local_environment_nodequeue_downgrade_set_nodequeue_version() {
+  $nodequeue_version = drush_get_option('version', 7201);
+  db_update('system')
+    ->fields(array('schema_version' => $nodequeue_version))
+    ->condition('name', 'nodequeue')
+    ->execute();
+}
+
 function _drush_deeson_local_environment_sort_extensions($a, $b) {
   return strcasecmp($a->info['name'], $b->info['name']);
+}
+
+function _drush_deeson_local_environment_nodequeue_downgrade_populate_qid($table, $queues) {
+  foreach ($queues as $name => $qid) {
+    db_update($table)
+      ->fields(array('qid' => $qid))
+      ->condition('name', $name)
+      ->execute();
+  }
 }
